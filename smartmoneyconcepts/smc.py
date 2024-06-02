@@ -938,30 +938,26 @@ def compute_bos_choch(highlow, inputLevel, ohlc_close, ohlc_high, ohlc_low, clos
             level_order[idx] = inputLevel[i]
             highs_lows_order[idx] = highlow[i]
             if idx >= 3:
+                lo3, lo2, lo1, lo0 = level_order[idx-3], level_order[idx-2], level_order[idx-1], level_order[idx]
+                hlo3, hlo2, hlo1, hlo0 = highs_lows_order[idx-3], highs_lows_order[idx-2], highs_lows_order[idx-1], highs_lows_order[idx]
+                last_pos = last_positions[-2]
+
                 # bullish bos
-                if (highs_lows_order[idx-3] == -1 and highs_lows_order[idx-2] == 1 and
-                        highs_lows_order[idx-1] == -1 and highs_lows_order[idx] == 1 and
-                        level_order[idx-3] < level_order[idx-1] < level_order[idx-2] < level_order[idx]):
-                    bos[last_positions[-2]] = 1
-                    level[last_positions[-2]] = level_order[idx-2]
+                if hlo3 == -1 and hlo2 == 1 and hlo1 == -1 and hlo0 == 1 and lo3 < lo1 < lo2 < lo0:
+                    bos[last_pos] = 1
+                    level[last_pos] = lo2
                 # bearish bos
-                elif (highs_lows_order[idx-3] == 1 and highs_lows_order[idx-2] == -1 and
-                      highs_lows_order[idx-1] == 1 and highs_lows_order[idx] == -1 and
-                      level_order[idx-3] > level_order[idx-1] > level_order[idx-2] > level_order[idx]):
-                    bos[last_positions[-2]] = -1
-                    level[last_positions[-2]] = level_order[idx-2]
+                elif hlo3 == 1 and hlo2 == -1 and hlo1 == 1 and hlo0 == -1 and lo3 > lo1 > lo2 > lo0:
+                    bos[last_pos] = -1
+                    level[last_pos] = lo2
                 # bullish choch
-                elif (highs_lows_order[idx-3] == -1 and highs_lows_order[idx-2] == 1 and
-                      highs_lows_order[idx-1] == -1 and highs_lows_order[idx] == 1 and
-                      level_order[idx] > level_order[idx-2] > level_order[idx-3] > level_order[idx-1]):
-                    choch[last_positions[-2]] = 1
-                    level[last_positions[-2]] = level_order[idx-2]
+                elif hlo3 == -1 and hlo2 == 1 and hlo1 == -1 and hlo0 == 1 and lo0 > lo2 > lo3 > lo1:
+                    choch[last_pos] = 1
+                    level[last_pos] = lo2
                 # bearish choch
-                elif (highs_lows_order[idx-3] == 1 and highs_lows_order[idx-2] == -1 and
-                      highs_lows_order[idx-1] == 1 and highs_lows_order[idx] == -1 and
-                      level_order[idx] < level_order[idx-2] < level_order[idx-3] < level_order[idx-1]):
-                    choch[last_positions[-2]] = -1
-                    level[last_positions[-2]] = level_order[idx-2]
+                elif hlo3 == 1 and hlo2 == -1 and hlo1 == 1 and hlo0 == -1 and lo0 < lo2 < lo3 < lo1:
+                    choch[last_pos] = -1
+                    level[last_pos] = lo2
             last_positions.append(i)
             idx += 1
 
