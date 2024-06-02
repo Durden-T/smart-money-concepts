@@ -923,10 +923,8 @@ def rolling_min(nums, k, fillna=True, is_bool=False):
 @numba.njit(cache=True, nogil=True)
 def compute_bos_choch(highlow, inputLevel, ohlc_close, ohlc_high, ohlc_low, close_break):
     n = len(ohlc_close)
-    level_order = np.empty(n, dtype=np.float32)
-    highs_lows_order = np.empty(n, dtype=np.int32)
-    level_order.fill(np.nan)
-    highs_lows_order.fill(np.nan)
+    level_order = np.full(n, np.nan, dtype=np.float32)
+    highs_lows_order = np.full(n, np.nan, dtype=np.int32)
 
     bos = np.zeros(n, dtype=np.int32)
     choch = np.zeros(n, dtype=np.int32)
@@ -968,7 +966,9 @@ def compute_bos_choch(highlow, inputLevel, ohlc_close, ohlc_high, ohlc_low, clos
             idx += 1
 
     broken = np.zeros(n, dtype=np.int32)
-    for i in np.where(np.logical_or(bos != 0, choch != 0))[0]:
+    significant_indices = np.where(np.logical_or(bos != 0, choch != 0))[0]
+
+    for i in significant_indices:
         if bos[i] == 1 or choch[i] == 1:
             mask = (ohlc_close if close_break else ohlc_high)[i + 2:] > level[i]
         elif bos[i] == -1 or choch[i] == -1:
@@ -976,16 +976,17 @@ def compute_bos_choch(highlow, inputLevel, ohlc_close, ohlc_high, ohlc_low, clos
         if np.any(mask):
             j = np.argmax(mask) + i + 2
             broken[i] = j
-            for k in np.where(np.logical_or(bos != 0, choch != 0))[0]:
+            for k in significant_indices:
                 if k < i and broken[k] >= j:
                     bos[k] = 0
                     choch[k] = 0
                     level[k] = 0
 
-    for i in np.where(np.logical_and(np.logical_or(bos != 0, choch != 0), broken == 0))[0]:
-        bos[i] = 0
-        choch[i] = 0
-        level[i] = 0
+    for i in significant_indices:
+        if broken[i] == 0:
+            bos[i] = 0
+            choch[i] = 0
+            level[i] = 0
 
     bos = np.where(bos != 0, bos, np.nan)
     choch = np.where(choch != 0, choch, np.nan)
