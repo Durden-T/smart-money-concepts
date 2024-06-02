@@ -30,24 +30,26 @@ class TestSmartMoneyConcepts(unittest.TestCase):
         pd.testing.assert_frame_equal(fvg_data, fvg_result_data, check_dtype=False)
 
     def test_swing_highs_lows(self):
+        smc.swing_highs_lows(df, swing_length=5)
         start_time = time.time()
         swing_highs_lows_data = smc.swing_highs_lows(df, swing_length=5)
+        print("swing_highs_lows test time: ", time.time() - start_time)
         swing_highs_lows_result_data = pd.read_csv(
             os.path.join(
                 "test_data", test_instrument, "swing_highs_lows_result_data.csv"
             )
         )
-        print("swing_highs_lows test time: ", time.time() - start_time)
         pd.testing.assert_frame_equal(swing_highs_lows_data, swing_highs_lows_result_data, check_dtype=False)
 
     def test_bos_choch(self):
+        smc.swing_highs_lows(df, swing_length=5)
         start_time = time.time()
         swing_highs_lows_data = smc.swing_highs_lows(df, swing_length=5)
         bos_choch_data = smc.bos_choch(df, swing_highs_lows_data)
+        print("bos_choch test time: ", time.time() - start_time)
         bos_choch_result_data = pd.read_csv(
             os.path.join("test_data", test_instrument, "bos_choch_result_data.csv")
         )
-        print("bos_choch test time: ", time.time() - start_time)
         pd.testing.assert_frame_equal(
             bos_choch_data, bos_choch_result_data, check_dtype=False
         )
