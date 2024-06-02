@@ -1,4 +1,6 @@
 from functools import wraps
+
+import numba
 import pandas as pd
 import numpy as np
 from pandas import DataFrame, Series
@@ -149,48 +151,12 @@ class smc:
         """
 
         swing_length *= 2
-        # set the highs to 1 if the current high is the highest high in the last 5 candles and next 5 candles
-        swing_highs_lows = np.where(
-            ohlc["high"]
-            == ohlc["high"].shift(-(swing_length // 2)).rolling(swing_length).max(),
-            1,
-            np.where(
-                ohlc["low"]
-                == ohlc["low"].shift(-(swing_length // 2)).rolling(swing_length).min(),
-                -1,
-                np.nan,
-            ),
-        )
 
-        while True:
-            positions = np.where(~np.isnan(swing_highs_lows))[0]
+        highs = ohlc["high"].values
+        lows = ohlc["low"].values
 
-            if len(positions) < 2:
-                break
-
-            current = swing_highs_lows[positions[:-1]]
-            next = swing_highs_lows[positions[1:]]
-
-            highs = ohlc["high"].iloc[positions[:-1]].values
-            lows = ohlc["low"].iloc[positions[:-1]].values
-
-            next_highs = ohlc["high"].iloc[positions[1:]].values
-            next_lows = ohlc["low"].iloc[positions[1:]].values
-
-            index_to_remove = np.zeros(len(positions), dtype=bool)
-
-            consecutive_highs = (current == 1) & (next == 1)
-            index_to_remove[:-1] |= consecutive_highs & (highs < next_highs)
-            index_to_remove[1:] |= consecutive_highs & (highs >= next_highs)
-
-            consecutive_lows = (current == -1) & (next == -1)
-            index_to_remove[:-1] |= consecutive_lows & (lows > next_lows)
-            index_to_remove[1:] |= consecutive_lows & (lows <= next_lows)
-
-            if not index_to_remove.any():
-                break
-
-            swing_highs_lows[positions[index_to_remove]] = np.nan
+        swing_highs_lows = compute_swing_highs_lows(highs, lows, swing_length)
+        swing_highs_lows = remove_consecutive_swings(highs, lows, swing_highs_lows)
 
         positions = np.where(~np.isnan(swing_highs_lows))[0]
 
@@ -206,16 +172,15 @@ class smc:
 
         level = np.where(
             ~np.isnan(swing_highs_lows),
-            np.where(swing_highs_lows == 1, ohlc["high"], ohlc["low"]),
+            np.where(swing_highs_lows == 1, highs, lows),
             np.nan,
         )
 
-        return pd.concat(
-            [
-                pd.Series(swing_highs_lows, name="HighLow"),
-                pd.Series(level, name="Level"),
-            ],
-            axis=1,
+        return pd.DataFrame(
+            {
+                "HighLow": swing_highs_lows,
+                "Level": level,
+            }
         )
 
     @classmethod
@@ -946,3 +911,122 @@ class smc:
         deepest_retracement = pd.Series(deepest_retracement, name="DeepestRetracement%")
 
         return pd.concat([direction, current_retracement, deepest_retracement], axis=1)
+
+
+@numba.njit(cache=True, nogil=True)
+def compute_swing_highs_lows(high, low, swing_length):
+    half_swing = swing_length // 2
+    high_shifted = np.roll(high, -half_swing)
+    low_shifted = np.roll(low, -half_swing)
+
+    rolling_high_max = rolling_max(high_shifted, swing_length)
+    rolling_low_min = rolling_min(low_shifted, swing_length)
+
+    signals = np.full(high.shape, np.nan)
+
+    for i in range(len(high)):
+        if high[i] == rolling_high_max[i]:
+            signals[i] = 1
+        elif low[i] == rolling_low_min[i]:
+            signals[i] = -1
+
+    return signals
+
+@numba.njit(cache=True, nogil=True)
+def remove_consecutive_swings(highs, lows, swing_highs_lows):
+    """
+    :param swing_highs_lows: numpy.ndarray whose value is 1 or 0 or nan
+    """
+    while True:
+        positions = np.where(~np.isnan(swing_highs_lows))[0]
+
+        if len(positions) < 2:
+            break
+
+        current = swing_highs_lows[positions[:-1]]
+        next = swing_highs_lows[positions[1:]]
+
+        current_highs = highs[positions[:-1]]
+        current_lows = lows[positions[:-1]]
+
+        next_highs = highs[positions[1:]]
+        next_lows = lows[positions[1:]]
+
+        index_to_remove = np.zeros(len(positions), dtype=np.bool8)
+
+        consecutive_highs = (current == 1) & (next == 1)
+        index_to_remove[:-1] |= consecutive_highs & (current_highs < next_highs)
+        index_to_remove[1:] |= consecutive_highs & (current_highs >= next_highs)
+
+        consecutive_lows = (current == -1) & (next == -1)
+        index_to_remove[:-1] |= consecutive_lows & (current_lows > next_lows)
+        index_to_remove[1:] |= consecutive_lows & (current_lows <= next_lows)
+
+        if not np.any(index_to_remove):
+            break
+
+        swing_highs_lows[positions[index_to_remove]] = np.nan
+
+    return swing_highs_lows
+
+@numba.njit(cache=True, nogil=True)
+def rolling_max(nums, k, fillna=True, is_bool=False):
+    if k <= 1:
+        return nums
+    n = len(nums)
+    max_left, max_right, result = np.zeros_like(nums), np.zeros_like(nums), np.zeros_like(nums)
+
+    for i in range(n):
+        if i % k == 0:
+            max_left[i] = nums[i]
+        else:
+            max_left[i] = max(max_left[i - 1], nums[i])
+
+    max_right[n - 1] = nums[n - 1]
+    for i in range(n - 2, -1, -1):
+        if (i + 1) % k == 0:
+            max_right[i] = nums[i]
+        else:
+            max_right[i] = max(max_right[i + 1], nums[i])
+
+    if fillna:
+        if not is_bool:
+            result[:k] = np.nan
+    else:
+        result[:k] = nums[:k]
+    for i in range(n - k + 1):
+        result[i + k - 1] = max(max_right[i], max_left[i + k - 1])
+
+    return result
+
+@numba.njit(cache=True, nogil=True)
+def rolling_min(nums, k, fillna=True, is_bool=False):
+    if k <= 1:
+        return nums
+
+    n = len(nums)
+    min_left, min_right, result = np.zeros_like(nums), np.zeros_like(nums), np.zeros_like(nums)
+
+    for i in range(n):
+        if i % k == 0:
+            min_left[i] = nums[i]
+        else:
+            min_left[i] = min(min_left[i - 1], nums[i])
+
+    min_right[n - 1] = nums[n - 1]
+    for i in range(n - 2, -1, -1):
+        if (i + 1) % k == 0:
+            min_right[i] = nums[i]
+        else:
+            min_right[i] = min(min_right[i + 1], nums[i])
+
+    if fillna:
+        if not is_bool:
+            result[:k] = np.nan
+    else:
+        result[:k] = nums[:k]
+
+    for i in range(n - k + 1):
+        result[i + k - 1] = min(min_right[i], min_left[i + k - 1])
+
+    return result
