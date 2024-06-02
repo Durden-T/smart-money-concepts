@@ -935,36 +935,44 @@ def compute_swing_highs_lows(high, low, swing_length):
 @numba.njit(cache=True, nogil=True)
 def remove_consecutive_swings(highs, lows, swing_highs_lows):
     """
-    :param swing_highs_lows: numpy.ndarray whose value is 1 or 0 or nan
+    :param swing_highs_lows: numpy.ndarray whose value is 1 or -1 or nan
     """
     while True:
+        # Get positions of non-nan values
         positions = np.where(~np.isnan(swing_highs_lows))[0]
 
+        # If fewer than 2 positions, nothing to remove
         if len(positions) < 2:
             break
 
+        # Get current and next swing values
         current = swing_highs_lows[positions[:-1]]
         next = swing_highs_lows[positions[1:]]
 
+        # Get corresponding highs and lows
         current_highs = highs[positions[:-1]]
         current_lows = lows[positions[:-1]]
-
         next_highs = highs[positions[1:]]
         next_lows = lows[positions[1:]]
 
+        # Initialize index_to_remove as False
         index_to_remove = np.zeros(len(positions), dtype=np.bool8)
 
+        # Find consecutive highs and lows
         consecutive_highs = (current == 1) & (next == 1)
+        consecutive_lows = (current == -1) & (next == -1)
+
+        # Determine which indices to remove
         index_to_remove[:-1] |= consecutive_highs & (current_highs < next_highs)
         index_to_remove[1:] |= consecutive_highs & (current_highs >= next_highs)
-
-        consecutive_lows = (current == -1) & (next == -1)
         index_to_remove[:-1] |= consecutive_lows & (current_lows > next_lows)
         index_to_remove[1:] |= consecutive_lows & (current_lows <= next_lows)
 
+        # If no indices to remove, exit loop
         if not np.any(index_to_remove):
             break
 
+        # Set swing_highs_lows at indices to be removed to nan
         swing_highs_lows[positions[index_to_remove]] = np.nan
 
     return swing_highs_lows
