@@ -203,7 +203,7 @@ class smc:
         BrokenIndex = the index of the candle that broke the level
         """
 
-        swing_highs_lows = swing_highs_lows.copy()
+        #swing_highs_lows = swing_highs_lows.copy()
 
         ohlc_close = ohlc["close"].values
         ohlc_high = ohlc["high"].values
