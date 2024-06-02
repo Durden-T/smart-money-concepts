@@ -205,130 +205,11 @@ class smc:
 
         swing_highs_lows = swing_highs_lows.copy()
 
-        level_order = []
-        highs_lows_order = []
+        ohlc_close = ohlc["close"].values
+        ohlc_high = ohlc["high"].values
+        ohlc_low = ohlc["low"].values
 
-        bos = np.zeros(len(ohlc), dtype=np.int32)
-        choch = np.zeros(len(ohlc), dtype=np.int32)
-        level = np.zeros(len(ohlc), dtype=np.float32)
-
-        last_positions = []
-
-        for i in range(len(swing_highs_lows["HighLow"])):
-            if not np.isnan(swing_highs_lows["HighLow"][i]):
-                level_order.append(swing_highs_lows["Level"][i])
-                highs_lows_order.append(swing_highs_lows["HighLow"][i])
-                if len(level_order) >= 4:
-                    # bullish bos
-                    bos[last_positions[-2]] = (
-                        1
-                        if (
-                            np.all(highs_lows_order[-4:] == [-1, 1, -1, 1])
-                            and np.all(
-                                level_order[-4]
-                                < level_order[-2]
-                                < level_order[-3]
-                                < level_order[-1]
-                            )
-                        )
-                        else 0
-                    )
-                    level[last_positions[-2]] = (
-                        level_order[-3] if bos[last_positions[-2]] != 0 else 0
-                    )
-
-                    # bearish bos
-                    bos[last_positions[-2]] = (
-                        -1
-                        if (
-                            np.all(highs_lows_order[-4:] == [1, -1, 1, -1])
-                            and np.all(
-                                level_order[-4]
-                                > level_order[-2]
-                                > level_order[-3]
-                                > level_order[-1]
-                            )
-                        )
-                        else bos[last_positions[-2]]
-                    )
-                    level[last_positions[-2]] = (
-                        level_order[-3] if bos[last_positions[-2]] != 0 else 0
-                    )
-
-                    # bullish choch
-                    choch[last_positions[-2]] = (
-                        1
-                        if (
-                            np.all(highs_lows_order[-4:] == [-1, 1, -1, 1])
-                            and np.all(
-                                level_order[-1]
-                                > level_order[-3]
-                                > level_order[-4]
-                                > level_order[-2]
-                            )
-                        )
-                        else 0
-                    )
-                    level[last_positions[-2]] = (
-                        level_order[-3]
-                        if choch[last_positions[-2]] != 0
-                        else level[last_positions[-2]]
-                    )
-
-                    # bearish choch
-                    choch[last_positions[-2]] = (
-                        -1
-                        if (
-                            np.all(highs_lows_order[-4:] == [1, -1, 1, -1])
-                            and np.all(
-                                level_order[-1]
-                                < level_order[-3]
-                                < level_order[-4]
-                                < level_order[-2]
-                            )
-                        )
-                        else choch[last_positions[-2]]
-                    )
-                    level[last_positions[-2]] = (
-                        level_order[-3]
-                        if choch[last_positions[-2]] != 0
-                        else level[last_positions[-2]]
-                    )
-
-                last_positions.append(i)
-
-        broken = np.zeros(len(ohlc), dtype=np.int32)
-        for i in np.where(np.logical_or(bos != 0, choch != 0))[0]:
-            mask = np.zeros(len(ohlc), dtype=np.bool_)
-            # if the bos is 1 then check if the candles high has gone above the level
-            if bos[i] == 1 or choch[i] == 1:
-                mask = ohlc["close" if close_break else "high"][i + 2 :] > level[i]
-            # if the bos is -1 then check if the candles low has gone below the level
-            elif bos[i] == -1 or choch[i] == -1:
-                mask = ohlc["close" if close_break else "low"][i + 2 :] < level[i]
-            if np.any(mask):
-                j = np.argmax(mask) + i + 2
-                broken[i] = j
-                # if there are any unbroken bos or choch that started before this one and ended after this one then remove them
-                for k in np.where(np.logical_or(bos != 0, choch != 0))[0]:
-                    if k < i and broken[k] >= j:
-                        bos[k] = 0
-                        choch[k] = 0
-                        level[k] = 0
-
-        # remove the ones that aren't broken
-        for i in np.where(
-            np.logical_and(np.logical_or(bos != 0, choch != 0), broken == 0)
-        )[0]:
-            bos[i] = 0
-            choch[i] = 0
-            level[i] = 0
-
-        # replace all the 0s with np.nan
-        bos = np.where(bos != 0, bos, np.nan)
-        choch = np.where(choch != 0, choch, np.nan)
-        level = np.where(level != 0, level, np.nan)
-        broken = np.where(broken != 0, broken, np.nan)
+        bos, choch, level, broken = compute_bos_choch(swing_highs_lows, ohlc_close, ohlc_high, ohlc_low, close_break)
 
         bos = pd.Series(bos, name="BOS")
         choch = pd.Series(choch, name="CHOCH")
@@ -1038,3 +919,131 @@ def rolling_min(nums, k, fillna=True, is_bool=False):
         result[i + k - 1] = min(min_right[i], min_left[i + k - 1])
 
     return result
+
+def compute_bos_choch(swing_highs_lows, ohlc_close, ohlc_high, ohlc_low, close_break):
+    level_order = []
+    highs_lows_order = []
+
+    bos = np.zeros(len(ohlc_close), dtype=np.int32)
+    choch = np.zeros(len(ohlc_close), dtype=np.int32)
+    level = np.zeros(len(ohlc_close), dtype=np.float32)
+
+    last_positions = []
+
+    for i in range(len(swing_highs_lows["HighLow"])):
+        if not np.isnan(swing_highs_lows["HighLow"][i]):
+            level_order.append(swing_highs_lows["Level"][i])
+            highs_lows_order.append(swing_highs_lows["HighLow"][i])
+            if len(level_order) >= 4:
+                # bullish bos
+                bos[last_positions[-2]] = (
+                    1
+                    if (
+                            np.all(highs_lows_order[-4:] == [-1, 1, -1, 1])
+                            and np.all(
+                        level_order[-4]
+                        < level_order[-2]
+                        < level_order[-3]
+                        < level_order[-1]
+                    )
+                    )
+                    else 0
+                )
+                level[last_positions[-2]] = (
+                    level_order[-3] if bos[last_positions[-2]] != 0 else 0
+                )
+
+                # bearish bos
+                bos[last_positions[-2]] = (
+                    -1
+                    if (
+                            np.all(highs_lows_order[-4:] == [1, -1, 1, -1])
+                            and np.all(
+                        level_order[-4]
+                        > level_order[-2]
+                        > level_order[-3]
+                        > level_order[-1]
+                    )
+                    )
+                    else bos[last_positions[-2]]
+                )
+                level[last_positions[-2]] = (
+                    level_order[-3] if bos[last_positions[-2]] != 0 else 0
+                )
+
+                # bullish choch
+                choch[last_positions[-2]] = (
+                    1
+                    if (
+                            np.all(highs_lows_order[-4:] == [-1, 1, -1, 1])
+                            and np.all(
+                        level_order[-1]
+                        > level_order[-3]
+                        > level_order[-4]
+                        > level_order[-2]
+                    )
+                    )
+                    else 0
+                )
+                level[last_positions[-2]] = (
+                    level_order[-3]
+                    if choch[last_positions[-2]] != 0
+                    else level[last_positions[-2]]
+                )
+
+                # bearish choch
+                choch[last_positions[-2]] = (
+                    -1
+                    if (
+                            np.all(highs_lows_order[-4:] == [1, -1, 1, -1])
+                            and np.all(
+                        level_order[-1]
+                        < level_order[-3]
+                        < level_order[-4]
+                        < level_order[-2]
+                    )
+                    )
+                    else choch[last_positions[-2]]
+                )
+                level[last_positions[-2]] = (
+                    level_order[-3]
+                    if choch[last_positions[-2]] != 0
+                    else level[last_positions[-2]]
+                )
+
+            last_positions.append(i)
+
+    broken = np.zeros(len(ohlc_close), dtype=np.int32)
+    for i in np.where(np.logical_or(bos != 0, choch != 0))[0]:
+        mask = np.zeros(len(ohlc_close), dtype=np.bool_)
+        # if the bos is 1 then check if the candles high has gone above the level
+        if bos[i] == 1 or choch[i] == 1:
+            mask = (ohlc_close if close_break else ohlc_high)[i + 2 :] > level[i]
+        # if the bos is -1 then check if the candles low has gone below the level
+        elif bos[i] == -1 or choch[i] == -1:
+            mask = (ohlc_close if close_break else ohlc_low)[i + 2 :] < level[i]
+        if np.any(mask):
+            j = np.argmax(mask) + i + 2
+            broken[i] = j
+            # if there are any unbroken bos or choch that started before this one and ended after this one then remove them
+            for k in np.where(np.logical_or(bos != 0, choch != 0))[0]:
+                if k < i and broken[k] >= j:
+                    bos[k] = 0
+                    choch[k] = 0
+                    level[k] = 0
+
+    # remove the ones that aren't broken
+    for i in np.where(
+            np.logical_and(np.logical_or(bos != 0, choch != 0), broken == 0)
+    )[0]:
+        bos[i] = 0
+        choch[i] = 0
+        level[i] = 0
+
+    # replace all the 0s with np.nan
+    bos = np.where(bos != 0, bos, np.nan)
+    choch = np.where(choch != 0, choch, np.nan)
+    level = np.where(level != 0, level, np.nan)
+    broken = np.where(broken != 0, broken, np.nan)
+
+    return bos, choch, level, broken
