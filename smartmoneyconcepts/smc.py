@@ -1006,9 +1006,9 @@ class smc:
                 )
 
         # shift the arrays by 1
-        current_retracement = np.roll(current_retracement, 1)
-        deepest_retracement = np.roll(deepest_retracement, 1)
-        direction = np.roll(direction, 1)
+        current_retracement = shift(current_retracement, 1)
+        deepest_retracement = shift(deepest_retracement, 1)
+        direction = shift(direction, 1)
 
         # remove the first 3 retracements as they get calculated incorrectly due to not enough data
         remove_first_count = 0
@@ -1036,8 +1036,8 @@ class smc:
 @numba.njit(cache=True, nogil=True)
 def compute_swing_highs_lows(high, low, swing_length):
     half_swing = swing_length // 2
-    high_shifted = np.roll(high, -half_swing)
-    low_shifted = np.roll(low, -half_swing)
+    high_shifted = shift(high, -half_swing)
+    low_shifted = shift(low, -half_swing)
 
     rolling_high_max = rolling_max(high_shifted, swing_length)
     rolling_low_min = rolling_min(low_shifted, swing_length)
@@ -1230,3 +1230,16 @@ def compute_bos_choch(highlow, inputLevel, ohlc_close, ohlc_high, ohlc_low, clos
     broken = np.where(broken != 0, broken, np.nan)
 
     return bos, choch, level, broken
+
+@numba.njit(cache=True, inline="always", nogil=True)
+def shift(arr, num: int = 1, fill_value=np.nan):
+    if num == 0:
+        return arr
+
+    result = np.full_like(arr,fill_value)
+    if num > 0:
+        result[num:] = arr[:-num]
+    elif num < 0:
+        result[:num] = arr[-num:]
+
+    return result
