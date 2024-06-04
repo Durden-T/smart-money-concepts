@@ -55,7 +55,7 @@ class smc:
     __version__ = "0.0.21"
 
     @classmethod
-    def fvg(cls, ohlc: DataFrame, join_consecutive=False) -> Series:
+    def fvg(cls, ohlc: DataFrame, join_consecutive=False) -> DataFrame:
         """
         FVG - Fair Value Gap
         A fair value gap is when the previous high is lower than the next low if the current candle is bullish.
@@ -136,7 +136,246 @@ class smc:
         )
 
     @classmethod
-    def swing_highs_lows(cls, ohlc: DataFrame, swing_length: int = 50) -> Series:
+    def old_swing_highs_lows(cls, ohlc: DataFrame, swing_length: int = 50) -> DataFrame:
+        """
+        Swing Highs and Lows
+        A swing high is when the current high is the highest high out of the swing_length amount of candles before and after.
+        A swing low is when the current low is the lowest low out of the swing_length amount of candles before and after.
+
+        parameters:
+        swing_length: int - the amount of candles to look back and forward to determine the swing high or low
+
+        returns:
+        HighLow = 1 if swing high, -1 if swing low
+        Level = the level of the swing high or low
+        """
+
+        swing_length *= 2
+        # set the highs to 1 if the current high is the highest high in the last 5 candles and next 5 candles
+        swing_highs_lows = np.where(
+            ohlc["high"]
+            == ohlc["high"].shift(-(swing_length // 2)).rolling(swing_length).max(),
+            1,
+            np.where(
+                ohlc["low"]
+                == ohlc["low"].shift(-(swing_length // 2)).rolling(swing_length).min(),
+                -1,
+                np.nan,
+                ),
+            )
+
+        while True:
+            positions = np.where(~np.isnan(swing_highs_lows))[0]
+
+            if len(positions) < 2:
+                break
+
+            current = swing_highs_lows[positions[:-1]]
+            next = swing_highs_lows[positions[1:]]
+
+            highs = ohlc["high"].iloc[positions[:-1]].values
+            lows = ohlc["low"].iloc[positions[:-1]].values
+
+            next_highs = ohlc["high"].iloc[positions[1:]].values
+            next_lows = ohlc["low"].iloc[positions[1:]].values
+
+            index_to_remove = np.zeros(len(positions), dtype=bool)
+
+            consecutive_highs = (current == 1) & (next == 1)
+            index_to_remove[:-1] |= consecutive_highs & (highs < next_highs)
+            index_to_remove[1:] |= consecutive_highs & (highs >= next_highs)
+
+            consecutive_lows = (current == -1) & (next == -1)
+            index_to_remove[:-1] |= consecutive_lows & (lows > next_lows)
+            index_to_remove[1:] |= consecutive_lows & (lows <= next_lows)
+
+            if not index_to_remove.any():
+                break
+
+            swing_highs_lows[positions[index_to_remove]] = np.nan
+
+        positions = np.where(~np.isnan(swing_highs_lows))[0]
+
+        if len(positions) > 0:
+            if swing_highs_lows[positions[0]] == 1:
+                swing_highs_lows[0] = -1
+            if swing_highs_lows[positions[0]] == -1:
+                swing_highs_lows[0] = 1
+            if swing_highs_lows[positions[-1]] == -1:
+                swing_highs_lows[-1] = 1
+            if swing_highs_lows[positions[-1]] == 1:
+                swing_highs_lows[-1] = -1
+
+        level = np.where(
+            ~np.isnan(swing_highs_lows),
+            np.where(swing_highs_lows == 1, ohlc["high"], ohlc["low"]),
+            np.nan,
+        )
+
+        return pd.concat(
+            [
+                pd.Series(swing_highs_lows, name="HighLow"),
+                pd.Series(level, name="Level"),
+            ],
+            axis=1,
+        )
+
+    @classmethod
+    def old_bos_choch(
+            cls, ohlc: DataFrame, swing_highs_lows: DataFrame, close_break: bool = True
+    ) -> DataFrame:
+        """
+        BOS - Break of Structure
+        CHoCH - Change of Character
+        these are both indications of market structure changing
+
+        parameters:
+        swing_highs_lows: DataFrame - provide the dataframe from the swing_highs_lows function
+        close_break: bool - if True then the break of structure will be mitigated based on the close of the candle otherwise it will be the high/low.
+
+        returns:
+        BOS = 1 if bullish break of structure, -1 if bearish break of structure
+        CHOCH = 1 if bullish change of character, -1 if bearish change of character
+        Level = the level of the break of structure or change of character
+        BrokenIndex = the index of the candle that broke the level
+        """
+
+        swing_highs_lows = swing_highs_lows.copy()
+
+        level_order = []
+        highs_lows_order = []
+
+        bos = np.zeros(len(ohlc), dtype=np.int32)
+        choch = np.zeros(len(ohlc), dtype=np.int32)
+        level = np.zeros(len(ohlc), dtype=np.float32)
+
+        last_positions = []
+
+        for i in range(len(swing_highs_lows["HighLow"])):
+            if not np.isnan(swing_highs_lows["HighLow"][i]):
+                level_order.append(swing_highs_lows["Level"][i])
+                highs_lows_order.append(swing_highs_lows["HighLow"][i])
+                if len(level_order) >= 4:
+                    # bullish bos
+                    bos[last_positions[-2]] = (
+                        1
+                        if (
+                                np.all(highs_lows_order[-4:] == [-1, 1, -1, 1])
+                                and np.all(
+                            level_order[-4]
+                            < level_order[-2]
+                            < level_order[-3]
+                            < level_order[-1]
+                        )
+                        )
+                        else 0
+                    )
+                    level[last_positions[-2]] = (
+                        level_order[-3] if bos[last_positions[-2]] != 0 else 0
+                    )
+
+                    # bearish bos
+                    bos[last_positions[-2]] = (
+                        -1
+                        if (
+                                np.all(highs_lows_order[-4:] == [1, -1, 1, -1])
+                                and np.all(
+                            level_order[-4]
+                            > level_order[-2]
+                            > level_order[-3]
+                            > level_order[-1]
+                        )
+                        )
+                        else bos[last_positions[-2]]
+                    )
+                    level[last_positions[-2]] = (
+                        level_order[-3] if bos[last_positions[-2]] != 0 else 0
+                    )
+
+                    # bullish choch
+                    choch[last_positions[-2]] = (
+                        1
+                        if (
+                                np.all(highs_lows_order[-4:] == [-1, 1, -1, 1])
+                                and np.all(
+                            level_order[-1]
+                            > level_order[-3]
+                            > level_order[-4]
+                            > level_order[-2]
+                        )
+                        )
+                        else 0
+                    )
+                    level[last_positions[-2]] = (
+                        level_order[-3]
+                        if choch[last_positions[-2]] != 0
+                        else level[last_positions[-2]]
+                    )
+
+                    # bearish choch
+                    choch[last_positions[-2]] = (
+                        -1
+                        if (
+                                np.all(highs_lows_order[-4:] == [1, -1, 1, -1])
+                                and np.all(
+                            level_order[-1]
+                            < level_order[-3]
+                            < level_order[-4]
+                            < level_order[-2]
+                        )
+                        )
+                        else choch[last_positions[-2]]
+                    )
+                    level[last_positions[-2]] = (
+                        level_order[-3]
+                        if choch[last_positions[-2]] != 0
+                        else level[last_positions[-2]]
+                    )
+
+                last_positions.append(i)
+
+        broken = np.zeros(len(ohlc), dtype=np.int32)
+        for i in np.where(np.logical_or(bos != 0, choch != 0))[0]:
+            mask = np.zeros(len(ohlc), dtype=np.bool_)
+            # if the bos is 1 then check if the candles high has gone above the level
+            if bos[i] == 1 or choch[i] == 1:
+                mask = ohlc["close" if close_break else "high"][i + 2 :] > level[i]
+            # if the bos is -1 then check if the candles low has gone below the level
+            elif bos[i] == -1 or choch[i] == -1:
+                mask = ohlc["close" if close_break else "low"][i + 2 :] < level[i]
+            if np.any(mask):
+                j = np.argmax(mask) + i + 2
+                broken[i] = j
+                # if there are any unbroken bos or choch that started before this one and ended after this one then remove them
+                for k in np.where(np.logical_or(bos != 0, choch != 0))[0]:
+                    if k < i and broken[k] >= j:
+                        bos[k] = 0
+                        choch[k] = 0
+                        level[k] = 0
+
+        # remove the ones that aren't broken
+        for i in np.where(
+                np.logical_and(np.logical_or(bos != 0, choch != 0), broken == 0)
+        )[0]:
+            bos[i] = 0
+            choch[i] = 0
+            level[i] = 0
+
+        # replace all the 0s with np.nan
+        bos = np.where(bos != 0, bos, np.nan)
+        choch = np.where(choch != 0, choch, np.nan)
+        level = np.where(level != 0, level, np.nan)
+        broken = np.where(broken != 0, broken, np.nan)
+
+        bos = pd.Series(bos, name="BOS")
+        choch = pd.Series(choch, name="CHOCH")
+        level = pd.Series(level, name="Level")
+        broken = pd.Series(broken, name="BrokenIndex")
+
+        return pd.concat([bos, choch, level, broken], axis=1)
+
+    @classmethod
+    def swing_highs_lows(cls, ohlc: DataFrame, swing_length: int = 50) -> DataFrame:
         """
         Swing Highs and Lows
         A swing high is when the current high is the highest high out of the swing_length amount of candles before and after.
@@ -186,7 +425,7 @@ class smc:
     @classmethod
     def bos_choch(
         cls, ohlc: DataFrame, swing_highs_lows: DataFrame, close_break: bool = True
-    ) -> Series:
+    ) -> DataFrame:
         """
         BOS - Break of Structure
         CHoCH - Change of Character
@@ -837,7 +1076,7 @@ def remove_consecutive_swings(highs, lows, swing_highs_lows):
         next_lows = lows[positions[1:]]
 
         # Initialize index_to_remove as False
-        index_to_remove = np.zeros(len(positions), dtype=np.bool8)
+        index_to_remove = np.zeros(len(positions), dtype=np.bool_)
 
         # Find consecutive highs and lows
         consecutive_highs = (current == 1) & (next == 1)
@@ -933,33 +1172,34 @@ def compute_bos_choch(highlow, inputLevel, ohlc_close, ohlc_high, ohlc_low, clos
     last_positions = []
 
     idx = 0
-    for i in range(len(highlow)):
-        if not np.isnan(highlow[i]):
-            level_order[idx] = inputLevel[i]
-            highs_lows_order[idx] = highlow[i]
-            if idx >= 3:
-                lo3, lo2, lo1, lo0 = level_order[idx-3], level_order[idx-2], level_order[idx-1], level_order[idx]
-                hlo3, hlo2, hlo1, hlo0 = highs_lows_order[idx-3], highs_lows_order[idx-2], highs_lows_order[idx-1], highs_lows_order[idx]
-                last_pos = last_positions[-2]
+    for i in range(n):
+        if np.isnan(highlow[i]):
+            continue
+        level_order[idx] = inputLevel[i]
+        highs_lows_order[idx] = highlow[i]
+        if idx >= 3:
+            lo3, lo2, lo1, lo0 = level_order[idx-3], level_order[idx-2], level_order[idx-1], level_order[idx]
+            hlo3, hlo2, hlo1, hlo0 = highs_lows_order[idx-3], highs_lows_order[idx-2], highs_lows_order[idx-1], highs_lows_order[idx]
+            last_pos = last_positions[-2]
 
-                # bullish bos
-                if hlo3 == -1 and hlo2 == 1 and hlo1 == -1 and hlo0 == 1 and lo3 < lo1 < lo2 < lo0:
-                    bos[last_pos] = 1
-                    level[last_pos] = lo2
-                # bearish bos
-                elif hlo3 == 1 and hlo2 == -1 and hlo1 == 1 and hlo0 == -1 and lo3 > lo1 > lo2 > lo0:
-                    bos[last_pos] = -1
-                    level[last_pos] = lo2
-                # bullish choch
-                elif hlo3 == -1 and hlo2 == 1 and hlo1 == -1 and hlo0 == 1 and lo0 > lo2 > lo3 > lo1:
-                    choch[last_pos] = 1
-                    level[last_pos] = lo2
-                # bearish choch
-                elif hlo3 == 1 and hlo2 == -1 and hlo1 == 1 and hlo0 == -1 and lo0 < lo2 < lo3 < lo1:
-                    choch[last_pos] = -1
-                    level[last_pos] = lo2
-            last_positions.append(i)
-            idx += 1
+            # bullish bos
+            if hlo3 == -1 and hlo2 == 1 and hlo1 == -1 and hlo0 == 1 and lo3 < lo1 < lo2 < lo0:
+                bos[last_pos] = 1
+                level[last_pos] = lo2
+            # bearish bos
+            elif hlo3 == 1 and hlo2 == -1 and hlo1 == 1 and hlo0 == -1 and lo3 > lo1 > lo2 > lo0:
+                bos[last_pos] = -1
+                level[last_pos] = lo2
+            # bullish choch
+            elif hlo3 == -1 and hlo2 == 1 and hlo1 == -1 and hlo0 == 1 and lo0 > lo2 > lo3 > lo1:
+                choch[last_pos] = 1
+                level[last_pos] = lo2
+            # bearish choch
+            elif hlo3 == 1 and hlo2 == -1 and hlo1 == 1 and hlo0 == -1 and lo0 < lo2 < lo3 < lo1:
+                choch[last_pos] = -1
+                level[last_pos] = lo2
+        last_positions.append(i)
+        idx += 1
 
     broken = np.zeros(n, dtype=np.int32)
     significant_indices = np.where(np.logical_or(bos != 0, choch != 0))[0]
